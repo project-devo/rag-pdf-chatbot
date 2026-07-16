@@ -413,7 +413,7 @@ button.send-btn:disabled {
   }
 
   .sidebar.collapsed {
-    width: 56px !important;
+    width: 56px;
     overflow: hidden;
   }
 

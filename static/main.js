@@ -38,9 +38,9 @@ const resizeHandle = document.getElementById('resizeHandle');
 const savedWidth = localStorage.getItem('sidebarWidth');
 if (savedWidth) {
   sidebar.style.setProperty('--sidebar-width', savedWidth + 'px');
-  sidebar.style.width = savedWidth + 'px';
 }
 let resizing = false;
+let lastResizeWidth = null;
 resizeHandle.addEventListener('mousedown', () => {
   resizing = true;
   document.body.style.userSelect = 'none';
@@ -48,13 +48,14 @@ resizeHandle.addEventListener('mousedown', () => {
 document.addEventListener('mousemove', (e) => {
   if (!resizing) return;
   const width = Math.min(480, Math.max(200, e.clientX));
-  sidebar.style.width = width + 'px';
+  sidebar.style.setProperty('--sidebar-width', width + 'px');
+  lastResizeWidth = width;
 });
 document.addEventListener('mouseup', () => {
   if (!resizing) return;
   resizing = false;
   document.body.style.userSelect = '';
-  localStorage.setItem('sidebarWidth', parseInt(sidebar.style.width, 10));
+  if (lastResizeWidth) localStorage.setItem('sidebarWidth', lastResizeWidth);
 });
 
 // --- Folder tree + document registry ---
