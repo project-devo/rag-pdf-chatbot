@@ -159,12 +159,10 @@ def delete_document(doc_id: str) -> None:
 
 
 WELCOME_SYSTEM_PROMPT = """You summarize documents for a chat app's welcome screen.
-Given excerpts from a document, respond with EXACTLY two lines:
-Line 1: a 1-2 sentence plain-English summary of what the document is about.
-Line 2: three example questions a user could ask about it, separated by " | ".
-No headers, no markdown, no numbering. Example:
-This is a Q1 2026 financial report covering revenue, expenses, and headcount growth.
-What was total revenue this quarter? | Why did operating expenses increase? | How much did headcount grow?"""
+Given excerpts from a document, respond with a JSON object of this exact shape:
+{"summary": "<1-2 sentence plain-English summary of what the document is about>", "questions": ["q1", "q2", "q3"]}
+"questions" is exactly three example questions a user could ask about the document. Example:
+{"summary": "This is a Q1 2026 financial report covering revenue, expenses, and headcount growth.", "questions": ["What was total revenue this quarter?", "Why did operating expenses increase?", "How much did headcount grow?"]}"""
 
 
 def get_or_create_welcome(doc_id: str) -> Dict:
@@ -195,43 +193,22 @@ def get_or_create_welcome(doc_id: str) -> Dict:
         response = client.chat.completions.create(
             model=CHAT_MODEL,
             max_tokens=300,
+            response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": WELCOME_SYSTEM_PROMPT},
                 {"role": "user", "content": f"Document excerpts:\n---\n{excerpt}\n---"},
             ],
         )
-        lines = response.choices[0].message.content.strip().split("\n")
-        message = lines[0].strip()
-        questions = [q.strip() for q in lines[1].split("|")][:3] if len(lines) > 1 else []
-
-        # If we didn't get questions from line 2, try parsing the single line case where
-        # summary and questions are on the same line separated by " | "
-        if not questions and len(lines) == 1 and " | " in message:
-            parts = message.split(" | ")
-            if len(parts) >= 3:
-                # First part may contain summary + first question; extract summary
-                first_part = parts[0]
-                # Split by sentence to find where questions start (sentences with "?")
-                sentences = first_part.split(". ")
-                summary_parts = []
-                first_question_part = None
-                for sent in sentences:
-                    if "?" in sent:
-                        first_question_part = sent
-                        break
-                    summary_parts.append(sent)
-
-                message = ". ".join(summary_parts).strip()
-                if summary_parts:
-                    message += "."
-
-                questions = []
-                if first_question_part:
-                    questions.append(first_question_part.strip())
-                questions.extend([q.strip() for q in parts[1:]])
-                questions = questions[:3]
-
-        if not message or len(questions) != 3:
+        data = json.loads(response.choices[0].message.content)
+        message = data.get("summary")
+        questions = data.get("questions")
+        if not (isinstance(message, str) and message.strip()):
+            return fallback
+        if not (
+            isinstance(questions, list)
+            and len(questions) == 3
+            and all(isinstance(q, str) and q.strip() for q in questions)
+        ):
             return fallback
     except Exception:
         return fallback
