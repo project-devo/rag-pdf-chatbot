@@ -413,6 +413,7 @@ async function selectDocument(newDocId) {
 
   try {
     const res = await fetch(`/documents/${newDocId}/welcome`);
+    if (!res.ok) throw new Error('welcome fetch failed');
     const data = await res.json();
     messagesEl.innerHTML = `
       <div class="msg-wrapper bot">
