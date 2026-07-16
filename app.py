@@ -15,7 +15,7 @@ from typing import List, Optional
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -34,7 +34,7 @@ def index():
 
 
 @app.post("/upload")
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_pdf(file: UploadFile = File(...), folder: str = Form("Unfiled")):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
@@ -43,7 +43,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         tmp_path = tmp.name
 
     try:
-        result = rag.ingest_pdf(tmp_path, original_filename=file.filename)
+        result = rag.ingest_pdf(tmp_path, original_filename=file.filename, folder=folder)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     finally:
@@ -61,6 +61,39 @@ class ChatRequest(BaseModel):
     doc_id: str
     question: str
     history: Optional[List[ChatTurn]] = None
+
+
+class FolderUpdate(BaseModel):
+    folder: str
+
+
+@app.get("/documents")
+def list_documents():
+    return rag.list_documents()
+
+
+@app.patch("/documents/{doc_id}")
+def move_document(doc_id: str, body: FolderUpdate):
+    try:
+        return rag.set_folder(doc_id, body.folder)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.delete("/documents/{doc_id}", status_code=204)
+def remove_document(doc_id: str):
+    try:
+        rag.delete_document(doc_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/documents/{doc_id}/welcome")
+def document_welcome(doc_id: str):
+    try:
+        return rag.get_or_create_welcome(doc_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.post("/chat")
