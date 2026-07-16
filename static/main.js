@@ -9,7 +9,6 @@ let isProcessing = false;
 // DOM Elements
 const fileInput = document.getElementById('fileInput');
 const uploadBox = document.getElementById('uploadBox');
-const docInfo = document.getElementById('docInfo');
 const statusText = document.getElementById('statusText');
 const statusIndicator = document.getElementById('statusIndicator');
 const questionInput = document.getElementById('questionInput');
@@ -23,6 +22,158 @@ const headerTitle = document.getElementById('headerTitle');
 mobileToggle.addEventListener('click', () => {
   sidebar.classList.toggle('open');
 });
+
+// --- Collapse ---
+const collapseToggle = document.getElementById('collapseToggle');
+if (localStorage.getItem('sidebarCollapsed') === 'true') {
+  sidebar.classList.add('collapsed');
+}
+collapseToggle.addEventListener('click', () => {
+  sidebar.classList.toggle('collapsed');
+  localStorage.setItem('sidebarCollapsed', sidebar.classList.contains('collapsed'));
+});
+
+// --- Resize ---
+const resizeHandle = document.getElementById('resizeHandle');
+const savedWidth = localStorage.getItem('sidebarWidth');
+if (savedWidth) {
+  sidebar.style.setProperty('--sidebar-width', savedWidth + 'px');
+  sidebar.style.width = savedWidth + 'px';
+}
+let resizing = false;
+resizeHandle.addEventListener('mousedown', () => {
+  resizing = true;
+  document.body.style.userSelect = 'none';
+});
+document.addEventListener('mousemove', (e) => {
+  if (!resizing) return;
+  const width = Math.min(480, Math.max(200, e.clientX));
+  sidebar.style.width = width + 'px';
+});
+document.addEventListener('mouseup', () => {
+  if (!resizing) return;
+  resizing = false;
+  document.body.style.userSelect = '';
+  localStorage.setItem('sidebarWidth', parseInt(sidebar.style.width, 10));
+});
+
+// --- Folder tree + document registry ---
+let allDocs = [];
+let activeDocId = null;
+const folderTreeEl = document.getElementById('folderTree');
+const folderSelectEl = document.getElementById('folderSelect');
+const newFolderBtn = document.getElementById('newFolderBtn');
+const collapsedFolders = new Set(JSON.parse(localStorage.getItem('collapsedFolders') || '[]'));
+
+async function fetchDocuments() {
+  const res = await fetch('/documents');
+  allDocs = await res.json();
+  renderFolderTree();
+  renderFolderSelect();
+  return allDocs;
+}
+
+function renderFolderSelect() {
+  const folders = [...new Set(['Unfiled', ...allDocs.map(d => d.folder)])];
+  folderSelectEl.innerHTML = folders.map(f => `<option value="${f}">${f}</option>`).join('');
+}
+
+newFolderBtn.addEventListener('click', () => {
+  const name = prompt('New folder name:');
+  if (!name) return;
+  const opt = document.createElement('option');
+  opt.value = name;
+  opt.textContent = name;
+  opt.selected = true;
+  folderSelectEl.appendChild(opt);
+});
+
+function renderFolderTree() {
+  const byFolder = {};
+  for (const doc of allDocs) {
+    (byFolder[doc.folder] ||= []).push(doc);
+  }
+
+  folderTreeEl.innerHTML = Object.keys(byFolder).sort().map(folder => {
+    const isCollapsed = collapsedFolders.has(folder);
+    const allFolders = Object.keys(byFolder).sort();
+    const rows = byFolder[folder].map(doc => {
+      const options = allFolders.map(f =>
+        `<option value="${f}" ${f === doc.folder ? 'selected' : ''}>${f}</option>`
+      ).join('');
+      return `
+      <div class="doc-row ${doc.doc_id === activeDocId ? 'active' : ''}" data-doc-id="${doc.doc_id}">
+        <i data-lucide="file-text" style="width:14px;height:14px;flex-shrink:0;"></i>
+        <span class="doc-name" title="${doc.filename}">${doc.filename}</span>
+        <select class="doc-move" data-move-id="${doc.doc_id}" title="Move to folder">${options}</select>
+        <button class="doc-delete" data-delete-id="${doc.doc_id}" title="Delete">
+          <i data-lucide="trash-2" style="width:13px;height:13px;"></i>
+        </button>
+      </div>
+    `;
+    }).join('');
+
+    return `
+      <div class="folder-group ${isCollapsed ? 'collapsed' : ''}" data-folder="${folder}">
+        <div class="folder-group-header">
+          <i data-lucide="chevron-down" class="chevron" style="width:14px;height:14px;"></i>
+          <span>${folder}</span>
+          <span style="margin-left:auto;font-weight:400;">${byFolder[folder].length}</span>
+        </div>
+        ${rows}
+      </div>
+    `;
+  }).join('');
+
+  lucide.createIcons();
+
+  folderTreeEl.querySelectorAll('.folder-group-header').forEach(header => {
+    header.addEventListener('click', () => {
+      const group = header.parentElement;
+      const folder = group.dataset.folder;
+      group.classList.toggle('collapsed');
+      if (group.classList.contains('collapsed')) collapsedFolders.add(folder);
+      else collapsedFolders.delete(folder);
+      localStorage.setItem('collapsedFolders', JSON.stringify([...collapsedFolders]));
+    });
+  });
+
+  folderTreeEl.querySelectorAll('.doc-row').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.doc-delete') || e.target.closest('.doc-move')) return;
+      selectDocument(row.dataset.docId);
+    });
+  });
+
+  folderTreeEl.querySelectorAll('.doc-move').forEach(select => {
+    select.addEventListener('click', (e) => e.stopPropagation());
+    select.addEventListener('change', async () => {
+      const id = select.dataset.moveId;
+      await fetch(`/documents/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: select.value }),
+      });
+      await fetchDocuments();
+    });
+  });
+
+  folderTreeEl.querySelectorAll('.doc-delete').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.deleteId;
+      const doc = allDocs.find(d => d.doc_id === id);
+      if (!confirm(`Delete "${doc?.filename || id}"? This cannot be undone.`)) return;
+      await fetch(`/documents/${id}`, { method: 'DELETE' });
+      if (activeDocId === id) {
+        activeDocId = null;
+        docId = null;
+        showLandingState();
+      }
+      await fetchDocuments();
+    });
+  });
+}
 
 // Drag and drop events
 ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
