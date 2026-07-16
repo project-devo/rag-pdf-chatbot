@@ -10,6 +10,7 @@ Pipeline:
   6. Build a grounded prompt and call Claude to answer using only that context
 """
 
+import json
 import os
 import uuid
 import hashlib
@@ -155,6 +156,91 @@ def delete_document(doc_id: str) -> None:
     except Exception as e:
         raise ValueError(f"Document {doc_id} not found") from e
     _client.delete_collection(doc_id)
+
+
+WELCOME_SYSTEM_PROMPT = """You summarize documents for a chat app's welcome screen.
+Given excerpts from a document, respond with EXACTLY two lines:
+Line 1: a 1-2 sentence plain-English summary of what the document is about.
+Line 2: three example questions a user could ask about it, separated by " | ".
+No headers, no markdown, no numbering. Example:
+This is a Q1 2026 financial report covering revenue, expenses, and headcount growth.
+What was total revenue this quarter? | Why did operating expenses increase? | How much did headcount grow?"""
+
+
+def get_or_create_welcome(doc_id: str) -> Dict:
+    try:
+        collection = _client.get_collection(name=doc_id, embedding_function=_embedding_fn)
+    except Exception as e:
+        raise ValueError(f"Document {doc_id} not found") from e
+
+    meta = dict(collection.metadata or {})
+    if meta.get("welcome_message") and meta.get("welcome_questions"):
+        return {
+            "message": meta["welcome_message"],
+            "suggested_questions": json.loads(meta["welcome_questions"]),
+        }
+
+    sample = collection.get(limit=3)
+    excerpt = "\n\n".join(sample.get("documents", []))[:3000]
+
+    fallback = {
+        "message": f"Document {meta.get('filename', doc_id)} has been loaded. What would you like to know about it?",
+        "suggested_questions": [],
+    }
+    if not excerpt.strip():
+        return fallback
+
+    try:
+        client = get_groq_client()
+        response = client.chat.completions.create(
+            model=CHAT_MODEL,
+            max_tokens=300,
+            messages=[
+                {"role": "system", "content": WELCOME_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Document excerpts:\n---\n{excerpt}\n---"},
+            ],
+        )
+        lines = response.choices[0].message.content.strip().split("\n")
+        message = lines[0].strip()
+        questions = [q.strip() for q in lines[1].split("|")][:3] if len(lines) > 1 else []
+
+        # If we didn't get questions from line 2, try parsing the single line case where
+        # summary and questions are on the same line separated by " | "
+        if not questions and len(lines) == 1 and " | " in message:
+            parts = message.split(" | ")
+            if len(parts) >= 3:
+                # First part may contain summary + first question; extract summary
+                first_part = parts[0]
+                # Split by sentence to find where questions start (sentences with "?")
+                sentences = first_part.split(". ")
+                summary_parts = []
+                first_question_part = None
+                for sent in sentences:
+                    if "?" in sent:
+                        first_question_part = sent
+                        break
+                    summary_parts.append(sent)
+
+                message = ". ".join(summary_parts).strip()
+                if summary_parts:
+                    message += "."
+
+                questions = []
+                if first_question_part:
+                    questions.append(first_question_part.strip())
+                questions.extend([q.strip() for q in parts[1:]])
+                questions = questions[:3]
+
+        if not message or len(questions) != 3:
+            return fallback
+    except Exception:
+        return fallback
+
+    meta["welcome_message"] = message
+    meta["welcome_questions"] = json.dumps(questions)
+    collection.modify(metadata=meta)
+
+    return {"message": message, "suggested_questions": questions}
 
 
 def ingest_pdf(pdf_path: str, original_filename: str, folder: str = "Unfiled") -> Dict:

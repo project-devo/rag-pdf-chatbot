@@ -1,5 +1,8 @@
 """Checks for the embedding/chunking path. Run: python test_rag.py"""
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import sys
 
 import rag
@@ -71,6 +74,42 @@ def test_set_folder_missing_doc_raises():
 def test_delete_document_missing_doc_raises():
     try:
         rag.delete_document("doc_does_not_exist_xyz")
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "doc_does_not_exist_xyz" in str(e)
+
+
+def test_get_or_create_welcome_generates_and_caches():
+    doc_id = "doc_task2_test"
+    collection = rag.get_collection(doc_id)
+    if collection.count() == 0:
+        collection.add(
+            ids=["c1"],
+            documents=[
+                "This document is a quarterly financial report. Revenue grew 12% "
+                "year over year to $4.2M. Operating expenses were $2.8M, driven "
+                "mainly by headcount growth in engineering and sales."
+            ],
+            metadatas=[{"page": 1, "filename": "finance.pdf"}],
+        )
+    collection.modify(metadata={"filename": "finance.pdf", "folder": "Unfiled", "num_pages": 1})
+
+    first = rag.get_or_create_welcome(doc_id)
+    assert isinstance(first["message"], str) and len(first["message"]) > 0
+    assert isinstance(first["suggested_questions"], list)
+    assert len(first["suggested_questions"]) == 3
+    assert all(isinstance(q, str) and q for q in first["suggested_questions"])
+
+    # Second call must hit the cache, not call Groq again - same object back.
+    second = rag.get_or_create_welcome(doc_id)
+    assert second == first
+
+    rag.delete_document(doc_id)
+
+
+def test_get_or_create_welcome_missing_doc_raises():
+    try:
+        rag.get_or_create_welcome("doc_does_not_exist_xyz")
         assert False, "expected ValueError"
     except ValueError as e:
         assert "doc_does_not_exist_xyz" in str(e)
