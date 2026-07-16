@@ -544,3 +544,24 @@ button.send-btn:disabled {
 .doc-row:hover .doc-delete {
   opacity: 1;
 }
+
+.suggested-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.suggested-chip {
+  background: var(--accent-soft);
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  padding: 6px 14px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  color: inherit;
+}
+
+.suggested-chip:hover {
+  background: var(--accent-soft-hover);
+}

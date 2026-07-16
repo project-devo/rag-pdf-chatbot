@@ -224,51 +224,20 @@ async function handleFileUpload(file) {
   }
 
   setStatus('loading', 'Ingesting PDF...');
-  docInfo.style.display = 'block';
-  docInfo.textContent = `Processing ${file.name}...`;
 
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('folder', folderSelectEl.value || 'Unfiled');
 
   try {
     const res = await fetch('/upload', { method: 'POST', body: formData });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Upload failed');
 
-    docId = data.doc_id;
-    headerTitle.textContent = data.filename;
-    
-    let infoHtml = `<strong>Loaded:</strong> ${data.filename}<br/>`;
-    infoHtml += `<strong>Chunks:</strong> ${data.num_chunks}`;
-    if (data.num_pages) infoHtml += `<br/><strong>Pages:</strong> ${data.num_pages}`;
-    if (data.status === 'already_ingested') infoHtml += `<br/><span style="color:#10b981">Already indexed</span>`;
-    
-    docInfo.innerHTML = infoHtml;
-    setStatus('ready', 'Ready for questions');
-    
-    questionInput.disabled = false;
-    sendBtn.disabled = false;
-    history = [];
-    
-    // Clear chat except welcome
-    messagesEl.innerHTML = `
-      <div class="msg-wrapper bot">
-        <div class="msg">
-          <p>Document <strong>${data.filename}</strong> has been loaded successfully. What would you like to know about it?</p>
-        </div>
-      </div>
-    `;
-    
-    // Close sidebar on mobile
-    if (window.innerWidth <= 768) {
-      sidebar.classList.remove('open');
-    }
-    
-    questionInput.focus();
-
+    await fetchDocuments();
+    await selectDocument(data.doc_id);
   } catch (err) {
     setStatus('error', 'Upload failed');
-    docInfo.textContent = err.message;
   }
 }
 
@@ -392,6 +361,83 @@ async function sendQuestion() {
     questionInput.focus();
   }
 }
+
+function greetingForTime() {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good morning';
+  if (hour < 18) return 'Good afternoon';
+  return 'Good evening';
+}
+
+function showLandingState() {
+  headerTitle.textContent = 'RAG Assistant';
+  questionInput.disabled = true;
+  sendBtn.disabled = true;
+  setStatus('', 'Awaiting document');
+
+  const folders = new Set(allDocs.map(d => d.folder));
+  const docCountText = allDocs.length === 0
+    ? 'No documents yet — upload a PDF to get started.'
+    : `${allDocs.length} document${allDocs.length === 1 ? '' : 's'} in ${folders.size} folder${folders.size === 1 ? '' : 's'} — pick one from the sidebar or upload a new one.`;
+
+  messagesEl.innerHTML = `
+    <div class="msg-wrapper bot">
+      <div class="msg">
+        <p>${greetingForTime()}. ${docCountText}</p>
+      </div>
+    </div>
+  `;
+}
+
+function renderSuggestedQuestions(questions) {
+  if (!questions || !questions.length) return '';
+  const chips = questions.map(q => `<button class="suggested-chip" data-question="${esc(q)}">${esc(q)}</button>`).join('');
+  return `<div class="suggested-chips">${chips}</div>`;
+}
+
+async function selectDocument(newDocId) {
+  activeDocId = newDocId;
+  docId = newDocId;
+  history = [];
+
+  const doc = allDocs.find(d => d.doc_id === newDocId);
+  headerTitle.textContent = doc ? doc.filename : 'RAG Assistant';
+  questionInput.disabled = false;
+  sendBtn.disabled = false;
+  setStatus('loading', 'Loading welcome...');
+  renderFolderTree();
+
+  messagesEl.innerHTML = `
+    <div class="msg-wrapper bot"><div class="msg"><p>Loading document context...</p></div></div>
+  `;
+
+  try {
+    const res = await fetch(`/documents/${newDocId}/welcome`);
+    const data = await res.json();
+    messagesEl.innerHTML = `
+      <div class="msg-wrapper bot">
+        <div class="msg"><p>${esc(data.message)}</p></div>
+        ${renderSuggestedQuestions(data.suggested_questions)}
+      </div>
+    `;
+  } catch (err) {
+    messagesEl.innerHTML = `
+      <div class="msg-wrapper bot"><div class="msg"><p>Document loaded. What would you like to know about it?</p></div></div>
+    `;
+  }
+
+  messagesEl.querySelectorAll('.suggested-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      questionInput.value = chip.dataset.question;
+      sendQuestion();
+    });
+  });
+
+  setStatus('ready', 'Ready for questions');
+  if (window.innerWidth <= 768) sidebar.classList.remove('open');
+}
+
+fetchDocuments().then(() => showLandingState());
 
 sendBtn.addEventListener('click', sendQuestion);
 questionInput.addEventListener('keydown', (e) => {
