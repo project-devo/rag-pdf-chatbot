@@ -403,13 +403,6 @@ button.send-btn:disabled {
   .collapse-toggle {
     display: none;
   }
-  .sidebar.collapsed .sidebar-header h2,
-  .sidebar.collapsed .upload-box,
-  .sidebar.collapsed .folder-controls,
-  .sidebar.collapsed .status-badge,
-  .sidebar.collapsed .folder-tree {
-    display: revert;
-  }
 }
 
 @media (min-width: 769px) {
@@ -418,19 +411,23 @@ button.send-btn:disabled {
     width: var(--sidebar-width, 280px);
     transition: width 0.15s ease;
   }
-}
 
-.sidebar.collapsed {
-  width: 56px;
-  overflow: hidden;
-}
+  .sidebar.collapsed {
+    width: 56px;
+    overflow: hidden;
+  }
 
-.sidebar.collapsed .sidebar-header h2,
-.sidebar.collapsed .upload-box,
-.sidebar.collapsed .folder-controls,
-.sidebar.collapsed .status-badge,
-.sidebar.collapsed .folder-tree {
-  display: none;
+  .sidebar.collapsed .sidebar-header h2,
+  .sidebar.collapsed .upload-box,
+  .sidebar.collapsed .folder-controls,
+  .sidebar.collapsed .status-badge,
+  .sidebar.collapsed .folder-tree {
+    display: none;
+  }
+
+  .sidebar.collapsed .resize-handle {
+    display: none;
+  }
 }
 
 .collapse-toggle {
@@ -450,10 +447,6 @@ button.send-btn:disabled {
   height: 100%;
   cursor: col-resize;
   z-index: 10;
-}
-
-.sidebar.collapsed .resize-handle {
-  display: none;
 }
 
 .folder-controls {
