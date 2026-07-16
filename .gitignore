@@ -19,3 +19,6 @@ venv.bak/
 # Database
 chroma_db/
 .superpowers/
+
+# Local Claude Code launch config
+.claude/
