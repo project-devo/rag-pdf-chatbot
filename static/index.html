@@ -20,6 +20,9 @@
     <div class="sidebar-header">
       <i data-lucide="sparkles" class="logo-icon"></i>
       <h2>Knowledge Base</h2>
+      <button class="collapse-toggle" id="collapseToggle" title="Collapse sidebar">
+        <i data-lucide="panel-left-close"></i>
+      </button>
     </div>
 
     <label class="upload-box" id="uploadBox">
@@ -31,12 +34,19 @@
       <input type="file" id="fileInput" accept="application/pdf" />
     </label>
 
+    <div class="folder-controls">
+      <select id="folderSelect"></select>
+      <button id="newFolderBtn" title="New folder"><i data-lucide="folder-plus"></i></button>
+    </div>
+
     <div class="status-badge" id="statusBadge">
       <div class="status-indicator" id="statusIndicator"></div>
       <span id="statusText">Awaiting document</span>
     </div>
 
-    <div id="docInfo" style="display: none;"></div>
+    <div class="folder-tree" id="folderTree"></div>
+
+    <div class="resize-handle" id="resizeHandle"></div>
   </aside>
 
   <main class="main">

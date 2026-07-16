@@ -18,3 +18,4 @@ venv.bak/
 
 # Database
 chroma_db/
+.superpowers/

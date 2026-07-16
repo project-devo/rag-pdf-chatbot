@@ -6,7 +6,7 @@ A full Retrieval-Augmented Generation (RAG) chatbot that answers questions about
 
 1. **Upload** a PDF via the web UI or `/upload` API.
 2. **Extract & chunk**: text is pulled page-by-page (`pypdf`) and split into ~400-token overlapping chunks so context isn't cut mid-thought.
-3. **Embed & store**: each chunk is embedded locally with `sentence-transformers` (`all-MiniLM-L6-v2`, free, no API calls) and stored in a persistent **Chroma** vector database, one collection per document (keyed by a content hash, so re-uploading the same file skips re-indexing).
+3. **Embed & store**: each chunk is embedded locally with Chroma's built-in ONNX runtime (`all-MiniLM-L6-v2`, free, no API calls, no torch dependency) and stored in a persistent **Chroma** vector database, one collection per document (keyed by a content hash, so re-uploading the same file skips re-indexing).
 4. **Retrieve**: your question is embedded and compared against stored chunks to find the top-5 most relevant excerpts.
 5. **Generate**: those excerpts + your question + conversation history are sent to a free **Groq**-hosted LLM (Llama 3.3 70B by default), which is instructed to answer *only* from the provided context and to cite page numbers.
 
@@ -69,7 +69,6 @@ curl -X POST http://localhost:8000/chat \
 |-----------------|------------------------------|-------------------------------------------|
 | `GROQ_API_KEY`  | (required)                   | Your free Groq API key                    |
 | `GROQ_MODEL`    | `llama-3.3-70b-versatile`    | Chat model used for generation            |
-| `EMBED_MODEL`   | `all-MiniLM-L6-v2`            | Sentence-transformers embedding model     |
 | `CHROMA_DIR`    | `./chroma_db`                | Where the vector DB is persisted on disk  |
 | `PORT`          | `8000` (local) / `7860` (Docker) | Server port                          |
 
@@ -88,8 +87,8 @@ This repo includes a `Dockerfile` and HF Spaces metadata, so deployment is copy-
    ```
    (Rename `README_HF.md` to `README.md` first, or merge its front-matter block into your existing README — HF Spaces reads the YAML front matter at the top of `README.md` to configure the Space.)
 3. **Add your secret**: in the Space's **Settings → Repository secrets**, add `GROQ_API_KEY` with your key. Never commit it to the repo.
-4. **(Optional) Persistent storage**: by default, anything written inside the container (like the Chroma DB) is wiped on restart/rebuild. In **Settings → Storage**, you can attach a small persistent volume and mount it at `/app/chroma_db` so uploaded PDFs stay indexed across restarts. Without it, users just need to re-upload PDFs after a Space restart.
-5. Build takes a few minutes (installing `sentence-transformers` + downloading the embedding model). Once done, your chatbot is live at `https://<your-username>-<your-space-name>.hf.space`.
+4. **Persistent storage (recommended, not optional here)**: by default, anything written inside the container (like the Chroma DB) is wiped on restart/rebuild. In **Settings → Storage**, attach a small persistent volume and mount it at `/app/chroma_db` so uploaded PDFs stay indexed across restarts. Without it, users must re-upload PDFs after every Space restart/sleep.
+5. Build takes a couple minutes (installing deps + caching the ONNX embedding model). Once done, your chatbot is live at `https://<your-username>-<your-space-name>.hf.space`.
 
 ### Other free hosts
 

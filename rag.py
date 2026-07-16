@@ -4,12 +4,13 @@ Core RAG (Retrieval-Augmented Generation) engine for the PDF chatbot.
 Pipeline:
   1. Extract text from PDF (pypdf)
   2. Chunk text with overlap (token-aware, using tiktoken as a length proxy)
-  3. Embed chunks (sentence-transformers, local, no API cost)
+  3. Embed chunks (all-MiniLM-L6-v2 via onnxruntime, local, no API cost)
   4. Store in a persistent Chroma vector DB (per-document collection)
   5. On query: embed the query, retrieve top-k similar chunks
   6. Build a grounded prompt and call Claude to answer using only that context
 """
 
+import json
 import os
 import uuid
 import hashlib
@@ -26,16 +27,17 @@ from groq import Groq
 # ---------------------------------------------------------------------------
 
 CHROMA_DIR = os.environ.get("CHROMA_DIR", "./chroma_db")
-EMBED_MODEL_NAME = os.environ.get("EMBED_MODEL", "all-MiniLM-L6-v2")
 CHAT_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 CHUNK_SIZE_WORDS = 300
 CHUNK_OVERLAP_WORDS = 50
 TOP_K = 5
 
 _client = chromadb.PersistentClient(path=CHROMA_DIR)
-_embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name=EMBED_MODEL_NAME
-)
+
+# all-MiniLM-L6-v2 via onnxruntime rather than sentence-transformers: same model
+# and same 384-dim output, but avoids pulling in torch (~400MB resident, which
+# does not fit in a 512MB host).
+_embedding_fn = embedding_functions.DefaultEmbeddingFunction()
 
 _groq_client: Optional[Groq] = None
 
@@ -112,7 +114,116 @@ def get_collection(doc_id: str):
     )
 
 
-def ingest_pdf(pdf_path: str, original_filename: str) -> Dict:
+def list_documents() -> List[Dict]:
+    """List every ingested document with its folder and stats."""
+    docs = []
+    for col in _client.list_collections():
+        count = col.count()
+        if not count:
+            continue
+        meta = col.metadata or {}
+        docs.append({
+            "doc_id": col.name,
+            "filename": meta.get("filename", col.name),
+            "folder": meta.get("folder", "Unfiled"),
+            "num_chunks": count,
+            "num_pages": meta.get("num_pages"),
+        })
+    return docs
+
+
+def set_folder(doc_id: str, folder: str) -> Dict:
+    """Move a document to a different folder. Metadata is replace-on-write,
+    so we read-merge-write the full dict rather than passing {"folder": folder}."""
+    try:
+        collection = _client.get_collection(name=doc_id, embedding_function=_embedding_fn)
+    except Exception as e:
+        raise ValueError(f"Document {doc_id} not found") from e
+
+    meta = dict(collection.metadata or {})
+    meta["folder"] = folder
+    collection.modify(metadata=meta)
+
+    return {
+        "doc_id": doc_id,
+        "filename": meta.get("filename", doc_id),
+        "folder": folder,
+        "num_chunks": collection.count(),
+        "num_pages": meta.get("num_pages"),
+    }
+
+
+def delete_document(doc_id: str) -> None:
+    try:
+        _client.get_collection(name=doc_id, embedding_function=_embedding_fn)
+    except Exception as e:
+        raise ValueError(f"Document {doc_id} not found") from e
+    _client.delete_collection(doc_id)
+
+
+WELCOME_SYSTEM_PROMPT = """You summarize documents for a chat app's welcome screen.
+Given excerpts from a document, respond with a JSON object of this exact shape:
+{"summary": "<1-2 sentence plain-English summary of what the document is about>", "questions": ["q1", "q2", "q3"]}
+"questions" is exactly three example questions a user could ask about the document. Example:
+{"summary": "This is a Q1 2026 financial report covering revenue, expenses, and headcount growth.", "questions": ["What was total revenue this quarter?", "Why did operating expenses increase?", "How much did headcount grow?"]}"""
+
+
+def get_or_create_welcome(doc_id: str) -> Dict:
+    try:
+        collection = _client.get_collection(name=doc_id, embedding_function=_embedding_fn)
+    except Exception as e:
+        raise ValueError(f"Document {doc_id} not found") from e
+
+    meta = dict(collection.metadata or {})
+    if meta.get("welcome_message") and meta.get("welcome_questions"):
+        return {
+            "message": meta["welcome_message"],
+            "suggested_questions": json.loads(meta["welcome_questions"]),
+        }
+
+    sample = collection.get(limit=3)
+    excerpt = "\n\n".join(sample.get("documents", []))[:3000]
+
+    fallback = {
+        "message": f"Document {meta.get('filename', doc_id)} has been loaded. What would you like to know about it?",
+        "suggested_questions": [],
+    }
+    if not excerpt.strip():
+        return fallback
+
+    try:
+        client = get_groq_client()
+        response = client.chat.completions.create(
+            model=CHAT_MODEL,
+            max_tokens=300,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": WELCOME_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Document excerpts:\n---\n{excerpt}\n---"},
+            ],
+        )
+        data = json.loads(response.choices[0].message.content)
+        message = data.get("summary")
+        questions = data.get("questions")
+        if not (isinstance(message, str) and message.strip()):
+            return fallback
+        if not (
+            isinstance(questions, list)
+            and len(questions) == 3
+            and all(isinstance(q, str) and q.strip() for q in questions)
+        ):
+            return fallback
+    except Exception:
+        return fallback
+
+    meta["welcome_message"] = message
+    meta["welcome_questions"] = json.dumps(questions)
+    collection.modify(metadata=meta)
+
+    return {"message": message, "suggested_questions": questions}
+
+
+def ingest_pdf(pdf_path: str, original_filename: str, folder: str = "Unfiled") -> Dict:
     """
     Ingest a PDF: extract, chunk, embed, and store.
     Idempotent - if the doc was already ingested (same content hash), skip re-embedding.
@@ -122,10 +233,13 @@ def ingest_pdf(pdf_path: str, original_filename: str) -> Dict:
     collection = get_collection(doc_id)
 
     if collection.count() > 0:
+        meta = collection.metadata or {}
         return {
             "doc_id": doc_id,
-            "filename": original_filename,
+            "filename": meta.get("filename", original_filename),
+            "folder": meta.get("folder", "Unfiled"),
             "num_chunks": collection.count(),
+            "num_pages": meta.get("num_pages"),
             "status": "already_ingested",
         }
 
@@ -143,10 +257,16 @@ def ingest_pdf(pdf_path: str, original_filename: str) -> Dict:
         documents=[c.text for c in chunks],
         metadatas=[{"page": c.page, "filename": original_filename} for c in chunks],
     )
+    collection.modify(metadata={
+        "filename": original_filename,
+        "folder": folder,
+        "num_pages": len(pages),
+    })
 
     return {
         "doc_id": doc_id,
         "filename": original_filename,
+        "folder": folder,
         "num_chunks": len(chunks),
         "num_pages": len(pages),
         "status": "ingested",

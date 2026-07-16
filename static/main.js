@@ -9,7 +9,6 @@ let isProcessing = false;
 // DOM Elements
 const fileInput = document.getElementById('fileInput');
 const uploadBox = document.getElementById('uploadBox');
-const docInfo = document.getElementById('docInfo');
 const statusText = document.getElementById('statusText');
 const statusIndicator = document.getElementById('statusIndicator');
 const questionInput = document.getElementById('questionInput');
@@ -23,6 +22,163 @@ const headerTitle = document.getElementById('headerTitle');
 mobileToggle.addEventListener('click', () => {
   sidebar.classList.toggle('open');
 });
+
+// --- Collapse ---
+const collapseToggle = document.getElementById('collapseToggle');
+if (localStorage.getItem('sidebarCollapsed') === 'true') {
+  sidebar.classList.add('collapsed');
+}
+collapseToggle.addEventListener('click', () => {
+  sidebar.classList.toggle('collapsed');
+  localStorage.setItem('sidebarCollapsed', sidebar.classList.contains('collapsed'));
+});
+
+// --- Resize ---
+const resizeHandle = document.getElementById('resizeHandle');
+const savedWidth = localStorage.getItem('sidebarWidth');
+if (savedWidth) {
+  sidebar.style.setProperty('--sidebar-width', savedWidth + 'px');
+}
+let resizing = false;
+let lastResizeWidth = null;
+resizeHandle.addEventListener('mousedown', () => {
+  resizing = true;
+  document.body.style.userSelect = 'none';
+});
+document.addEventListener('mousemove', (e) => {
+  if (!resizing) return;
+  const width = Math.min(480, Math.max(200, e.clientX));
+  sidebar.style.setProperty('--sidebar-width', width + 'px');
+  lastResizeWidth = width;
+});
+document.addEventListener('mouseup', () => {
+  if (!resizing) return;
+  resizing = false;
+  document.body.style.userSelect = '';
+  if (lastResizeWidth) localStorage.setItem('sidebarWidth', lastResizeWidth);
+});
+
+// --- Folder tree + document registry ---
+let allDocs = [];
+let activeDocId = null;
+const folderTreeEl = document.getElementById('folderTree');
+const folderSelectEl = document.getElementById('folderSelect');
+const newFolderBtn = document.getElementById('newFolderBtn');
+const collapsedFolders = new Set(JSON.parse(localStorage.getItem('collapsedFolders') || '[]'));
+
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+async function fetchDocuments() {
+  const res = await fetch('/documents');
+  allDocs = await res.json();
+  renderFolderTree();
+  renderFolderSelect();
+  return allDocs;
+}
+
+function renderFolderSelect() {
+  const folders = [...new Set(['Unfiled', ...allDocs.map(d => d.folder)])];
+  folderSelectEl.innerHTML = folders.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('');
+}
+
+newFolderBtn.addEventListener('click', () => {
+  const name = prompt('New folder name:');
+  if (!name) return;
+  const opt = document.createElement('option');
+  opt.value = name;
+  opt.textContent = name;
+  opt.selected = true;
+  folderSelectEl.appendChild(opt);
+});
+
+function renderFolderTree() {
+  const byFolder = {};
+  for (const doc of allDocs) {
+    (byFolder[doc.folder] ||= []).push(doc);
+  }
+
+  folderTreeEl.innerHTML = Object.keys(byFolder).sort().map(folder => {
+    const isCollapsed = collapsedFolders.has(folder);
+    const allFolders = Object.keys(byFolder).sort();
+    const rows = byFolder[folder].map(doc => {
+      const options = allFolders.map(f =>
+        `<option value="${esc(f)}" ${f === doc.folder ? 'selected' : ''}>${esc(f)}</option>`
+      ).join('');
+      return `
+      <div class="doc-row ${doc.doc_id === activeDocId ? 'active' : ''}" data-doc-id="${esc(doc.doc_id)}">
+        <i data-lucide="file-text" style="width:14px;height:14px;flex-shrink:0;"></i>
+        <span class="doc-name" title="${esc(doc.filename)}">${esc(doc.filename)}</span>
+        <select class="doc-move" data-move-id="${esc(doc.doc_id)}" title="Move to folder">${options}</select>
+        <button class="doc-delete" data-delete-id="${esc(doc.doc_id)}" title="Delete">
+          <i data-lucide="trash-2" style="width:13px;height:13px;"></i>
+        </button>
+      </div>
+    `;
+    }).join('');
+
+    return `
+      <div class="folder-group ${isCollapsed ? 'collapsed' : ''}" data-folder="${esc(folder)}">
+        <div class="folder-group-header">
+          <i data-lucide="chevron-down" class="chevron" style="width:14px;height:14px;"></i>
+          <span>${esc(folder)}</span>
+          <span style="margin-left:auto;font-weight:400;">${byFolder[folder].length}</span>
+        </div>
+        ${rows}
+      </div>
+    `;
+  }).join('');
+
+  lucide.createIcons();
+
+  folderTreeEl.querySelectorAll('.folder-group-header').forEach(header => {
+    header.addEventListener('click', () => {
+      const group = header.parentElement;
+      const folder = group.dataset.folder;
+      group.classList.toggle('collapsed');
+      if (group.classList.contains('collapsed')) collapsedFolders.add(folder);
+      else collapsedFolders.delete(folder);
+      localStorage.setItem('collapsedFolders', JSON.stringify([...collapsedFolders]));
+    });
+  });
+
+  folderTreeEl.querySelectorAll('.doc-row').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.doc-delete') || e.target.closest('.doc-move')) return;
+      selectDocument(row.dataset.docId);
+    });
+  });
+
+  folderTreeEl.querySelectorAll('.doc-move').forEach(select => {
+    select.addEventListener('click', (e) => e.stopPropagation());
+    select.addEventListener('change', async () => {
+      const id = select.dataset.moveId;
+      await fetch(`/documents/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: select.value }),
+      });
+      await fetchDocuments();
+    });
+  });
+
+  folderTreeEl.querySelectorAll('.doc-delete').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.deleteId;
+      const doc = allDocs.find(d => d.doc_id === id);
+      if (!confirm(`Delete "${doc?.filename || id}"? This cannot be undone.`)) return;
+      await fetch(`/documents/${id}`, { method: 'DELETE' });
+      if (activeDocId === id) {
+        activeDocId = null;
+        docId = null;
+        showLandingState();
+      }
+      await fetchDocuments();
+    });
+  });
+}
 
 // Drag and drop events
 ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -69,51 +225,20 @@ async function handleFileUpload(file) {
   }
 
   setStatus('loading', 'Ingesting PDF...');
-  docInfo.style.display = 'block';
-  docInfo.textContent = `Processing ${file.name}...`;
 
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('folder', folderSelectEl.value || 'Unfiled');
 
   try {
     const res = await fetch('/upload', { method: 'POST', body: formData });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || 'Upload failed');
 
-    docId = data.doc_id;
-    headerTitle.textContent = data.filename;
-    
-    let infoHtml = `<strong>Loaded:</strong> ${data.filename}<br/>`;
-    infoHtml += `<strong>Chunks:</strong> ${data.num_chunks}`;
-    if (data.num_pages) infoHtml += `<br/><strong>Pages:</strong> ${data.num_pages}`;
-    if (data.status === 'already_ingested') infoHtml += `<br/><span style="color:#10b981">Already indexed</span>`;
-    
-    docInfo.innerHTML = infoHtml;
-    setStatus('ready', 'Ready for questions');
-    
-    questionInput.disabled = false;
-    sendBtn.disabled = false;
-    history = [];
-    
-    // Clear chat except welcome
-    messagesEl.innerHTML = `
-      <div class="msg-wrapper bot">
-        <div class="msg">
-          <p>Document <strong>${data.filename}</strong> has been loaded successfully. What would you like to know about it?</p>
-        </div>
-      </div>
-    `;
-    
-    // Close sidebar on mobile
-    if (window.innerWidth <= 768) {
-      sidebar.classList.remove('open');
-    }
-    
-    questionInput.focus();
-
+    await fetchDocuments();
+    await selectDocument(data.doc_id);
   } catch (err) {
     setStatus('error', 'Upload failed');
-    docInfo.textContent = err.message;
   }
 }
 
@@ -237,6 +362,84 @@ async function sendQuestion() {
     questionInput.focus();
   }
 }
+
+function greetingForTime() {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good morning';
+  if (hour < 18) return 'Good afternoon';
+  return 'Good evening';
+}
+
+function showLandingState() {
+  headerTitle.textContent = 'RAG Assistant';
+  questionInput.disabled = true;
+  sendBtn.disabled = true;
+  setStatus('', 'Awaiting document');
+
+  const folders = new Set(allDocs.map(d => d.folder));
+  const docCountText = allDocs.length === 0
+    ? 'No documents yet — upload a PDF to get started.'
+    : `${allDocs.length} document${allDocs.length === 1 ? '' : 's'} in ${folders.size} folder${folders.size === 1 ? '' : 's'} — pick one from the sidebar or upload a new one.`;
+
+  messagesEl.innerHTML = `
+    <div class="msg-wrapper bot">
+      <div class="msg">
+        <p>${greetingForTime()}. ${docCountText}</p>
+      </div>
+    </div>
+  `;
+}
+
+function renderSuggestedQuestions(questions) {
+  if (!questions || !questions.length) return '';
+  const chips = questions.map(q => `<button class="suggested-chip" data-question="${esc(q)}">${esc(q)}</button>`).join('');
+  return `<div class="suggested-chips">${chips}</div>`;
+}
+
+async function selectDocument(newDocId) {
+  activeDocId = newDocId;
+  docId = newDocId;
+  history = [];
+
+  const doc = allDocs.find(d => d.doc_id === newDocId);
+  headerTitle.textContent = doc ? doc.filename : 'RAG Assistant';
+  questionInput.disabled = false;
+  sendBtn.disabled = false;
+  setStatus('loading', 'Loading welcome...');
+  renderFolderTree();
+
+  messagesEl.innerHTML = `
+    <div class="msg-wrapper bot"><div class="msg"><p>Loading document context...</p></div></div>
+  `;
+
+  try {
+    const res = await fetch(`/documents/${newDocId}/welcome`);
+    if (!res.ok) throw new Error('welcome fetch failed');
+    const data = await res.json();
+    messagesEl.innerHTML = `
+      <div class="msg-wrapper bot">
+        <div class="msg"><p>${esc(data.message)}</p></div>
+        ${renderSuggestedQuestions(data.suggested_questions)}
+      </div>
+    `;
+  } catch (err) {
+    messagesEl.innerHTML = `
+      <div class="msg-wrapper bot"><div class="msg"><p>Document loaded. What would you like to know about it?</p></div></div>
+    `;
+  }
+
+  messagesEl.querySelectorAll('.suggested-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      questionInput.value = chip.dataset.question;
+      sendQuestion();
+    });
+  });
+
+  setStatus('ready', 'Ready for questions');
+  if (window.innerWidth <= 768) sidebar.classList.remove('open');
+}
+
+fetchDocuments().then(() => showLandingState());
 
 sendBtn.addEventListener('click', sendQuestion);
 questionInput.addEventListener('keydown', (e) => {
