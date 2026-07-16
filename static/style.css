@@ -411,10 +411,12 @@ button.send-btn:disabled {
   }
 }
 
-.sidebar {
-  position: relative;
-  width: var(--sidebar-width, 280px);
-  transition: width 0.15s ease;
+@media (min-width: 769px) {
+  .sidebar {
+    position: relative;
+    width: var(--sidebar-width, 280px);
+    transition: width 0.15s ease;
+  }
 }
 
 .sidebar.collapsed {

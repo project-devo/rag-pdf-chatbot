@@ -65,6 +65,10 @@ const folderSelectEl = document.getElementById('folderSelect');
 const newFolderBtn = document.getElementById('newFolderBtn');
 const collapsedFolders = new Set(JSON.parse(localStorage.getItem('collapsedFolders') || '[]'));
 
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 async function fetchDocuments() {
   const res = await fetch('/documents');
   allDocs = await res.json();
@@ -75,7 +79,7 @@ async function fetchDocuments() {
 
 function renderFolderSelect() {
   const folders = [...new Set(['Unfiled', ...allDocs.map(d => d.folder)])];
-  folderSelectEl.innerHTML = folders.map(f => `<option value="${f}">${f}</option>`).join('');
+  folderSelectEl.innerHTML = folders.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('');
 }
 
 newFolderBtn.addEventListener('click', () => {
@@ -99,14 +103,14 @@ function renderFolderTree() {
     const allFolders = Object.keys(byFolder).sort();
     const rows = byFolder[folder].map(doc => {
       const options = allFolders.map(f =>
-        `<option value="${f}" ${f === doc.folder ? 'selected' : ''}>${f}</option>`
+        `<option value="${esc(f)}" ${f === doc.folder ? 'selected' : ''}>${esc(f)}</option>`
       ).join('');
       return `
-      <div class="doc-row ${doc.doc_id === activeDocId ? 'active' : ''}" data-doc-id="${doc.doc_id}">
+      <div class="doc-row ${doc.doc_id === activeDocId ? 'active' : ''}" data-doc-id="${esc(doc.doc_id)}">
         <i data-lucide="file-text" style="width:14px;height:14px;flex-shrink:0;"></i>
-        <span class="doc-name" title="${doc.filename}">${doc.filename}</span>
-        <select class="doc-move" data-move-id="${doc.doc_id}" title="Move to folder">${options}</select>
-        <button class="doc-delete" data-delete-id="${doc.doc_id}" title="Delete">
+        <span class="doc-name" title="${esc(doc.filename)}">${esc(doc.filename)}</span>
+        <select class="doc-move" data-move-id="${esc(doc.doc_id)}" title="Move to folder">${options}</select>
+        <button class="doc-delete" data-delete-id="${esc(doc.doc_id)}" title="Delete">
           <i data-lucide="trash-2" style="width:13px;height:13px;"></i>
         </button>
       </div>
@@ -114,10 +118,10 @@ function renderFolderTree() {
     }).join('');
 
     return `
-      <div class="folder-group ${isCollapsed ? 'collapsed' : ''}" data-folder="${folder}">
+      <div class="folder-group ${isCollapsed ? 'collapsed' : ''}" data-folder="${esc(folder)}">
         <div class="folder-group-header">
           <i data-lucide="chevron-down" class="chevron" style="width:14px;height:14px;"></i>
-          <span>${folder}</span>
+          <span>${esc(folder)}</span>
           <span style="margin-left:auto;font-weight:400;">${byFolder[folder].length}</span>
         </div>
         ${rows}
