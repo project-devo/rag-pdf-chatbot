@@ -4,7 +4,7 @@ Core RAG (Retrieval-Augmented Generation) engine for the PDF chatbot.
 Pipeline:
   1. Extract text from PDF (pypdf)
   2. Chunk text with overlap (token-aware, using tiktoken as a length proxy)
-  3. Embed chunks (sentence-transformers, local, no API cost)
+  3. Embed chunks (all-MiniLM-L6-v2 via onnxruntime, local, no API cost)
   4. Store in a persistent Chroma vector DB (per-document collection)
   5. On query: embed the query, retrieve top-k similar chunks
   6. Build a grounded prompt and call Claude to answer using only that context
@@ -26,16 +26,17 @@ from groq import Groq
 # ---------------------------------------------------------------------------
 
 CHROMA_DIR = os.environ.get("CHROMA_DIR", "./chroma_db")
-EMBED_MODEL_NAME = os.environ.get("EMBED_MODEL", "all-MiniLM-L6-v2")
 CHAT_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 CHUNK_SIZE_WORDS = 300
 CHUNK_OVERLAP_WORDS = 50
 TOP_K = 5
 
 _client = chromadb.PersistentClient(path=CHROMA_DIR)
-_embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name=EMBED_MODEL_NAME
-)
+
+# all-MiniLM-L6-v2 via onnxruntime rather than sentence-transformers: same model
+# and same 384-dim output, but avoids pulling in torch (~400MB resident, which
+# does not fit in a 512MB host).
+_embedding_fn = embedding_functions.DefaultEmbeddingFunction()
 
 _groq_client: Optional[Groq] = None
 
@@ -112,7 +113,51 @@ def get_collection(doc_id: str):
     )
 
 
-def ingest_pdf(pdf_path: str, original_filename: str) -> Dict:
+def list_documents() -> List[Dict]:
+    """List every ingested document with its folder and stats."""
+    docs = []
+    for col in _client.list_collections():
+        meta = col.metadata or {}
+        docs.append({
+            "doc_id": col.name,
+            "filename": meta.get("filename", col.name),
+            "folder": meta.get("folder", "Unfiled"),
+            "num_chunks": col.count(),
+            "num_pages": meta.get("num_pages"),
+        })
+    return docs
+
+
+def set_folder(doc_id: str, folder: str) -> Dict:
+    """Move a document to a different folder. Metadata is replace-on-write,
+    so we read-merge-write the full dict rather than passing {"folder": folder}."""
+    try:
+        collection = _client.get_collection(name=doc_id, embedding_function=_embedding_fn)
+    except Exception as e:
+        raise ValueError(f"Document {doc_id} not found") from e
+
+    meta = dict(collection.metadata or {})
+    meta["folder"] = folder
+    collection.modify(metadata=meta)
+
+    return {
+        "doc_id": doc_id,
+        "filename": meta.get("filename", doc_id),
+        "folder": folder,
+        "num_chunks": collection.count(),
+        "num_pages": meta.get("num_pages"),
+    }
+
+
+def delete_document(doc_id: str) -> None:
+    try:
+        _client.get_collection(name=doc_id, embedding_function=_embedding_fn)
+    except Exception as e:
+        raise ValueError(f"Document {doc_id} not found") from e
+    _client.delete_collection(doc_id)
+
+
+def ingest_pdf(pdf_path: str, original_filename: str, folder: str = "Unfiled") -> Dict:
     """
     Ingest a PDF: extract, chunk, embed, and store.
     Idempotent - if the doc was already ingested (same content hash), skip re-embedding.
@@ -122,10 +167,13 @@ def ingest_pdf(pdf_path: str, original_filename: str) -> Dict:
     collection = get_collection(doc_id)
 
     if collection.count() > 0:
+        meta = collection.metadata or {}
         return {
             "doc_id": doc_id,
-            "filename": original_filename,
+            "filename": meta.get("filename", original_filename),
+            "folder": meta.get("folder", "Unfiled"),
             "num_chunks": collection.count(),
+            "num_pages": meta.get("num_pages"),
             "status": "already_ingested",
         }
 
@@ -143,10 +191,16 @@ def ingest_pdf(pdf_path: str, original_filename: str) -> Dict:
         documents=[c.text for c in chunks],
         metadatas=[{"page": c.page, "filename": original_filename} for c in chunks],
     )
+    collection.modify(metadata={
+        "filename": original_filename,
+        "folder": folder,
+        "num_pages": len(pages),
+    })
 
     return {
         "doc_id": doc_id,
         "filename": original_filename,
+        "folder": folder,
         "num_chunks": len(chunks),
         "num_pages": len(pages),
         "status": "ingested",
