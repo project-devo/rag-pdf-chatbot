@@ -107,6 +107,15 @@ def test_get_or_create_welcome_generates_and_caches():
     rag.delete_document(doc_id)
 
 
+def test_list_documents_skips_empty_collections():
+    doc_id = "doc_empty_test"
+    rag.get_collection(doc_id)  # creates an empty collection, never populated
+
+    assert doc_id not in [d["doc_id"] for d in rag.list_documents()]
+
+    rag.delete_document(doc_id)
+
+
 def test_get_or_create_welcome_missing_doc_raises():
     try:
         rag.get_or_create_welcome("doc_does_not_exist_xyz")

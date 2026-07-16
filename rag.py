@@ -118,12 +118,15 @@ def list_documents() -> List[Dict]:
     """List every ingested document with its folder and stats."""
     docs = []
     for col in _client.list_collections():
+        count = col.count()
+        if not count:
+            continue
         meta = col.metadata or {}
         docs.append({
             "doc_id": col.name,
             "filename": meta.get("filename", col.name),
             "folder": meta.get("folder", "Unfiled"),
-            "num_chunks": col.count(),
+            "num_chunks": count,
             "num_pages": meta.get("num_pages"),
         })
     return docs
