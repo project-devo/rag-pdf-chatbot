@@ -3,7 +3,7 @@
 
 FROM python:3.11-slim
 
-# System deps needed by chromadb / sentence-transformers
+# System deps needed by chromadb
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
@@ -19,7 +19,7 @@ COPY . .
 # Pre-download the embedding model at build time so the first request
 # isn't slow and so it works even if the container has restricted
 # internet access at runtime.
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+RUN python -c "from chromadb.utils.embedding_functions import DefaultEmbeddingFunction; DefaultEmbeddingFunction()(['warmup'])"
 
 # Hugging Face Spaces expects the app to listen on port 7860.
 # Other hosts (Render, Railway, Fly.io) usually inject $PORT - we fall back to 7860.
