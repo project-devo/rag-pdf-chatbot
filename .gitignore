@@ -22,3 +22,8 @@ chroma_db/
 
 # Local Claude Code launch config
 .claude/
+
+# AI tool artifacts
+.licenses/
+docs/superpowers/
+arxiv_search_results.json
